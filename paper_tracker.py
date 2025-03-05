@@ -1,18 +1,25 @@
 import os
 import arxiv
-import fitz  # PyMuPDF，用于PDF文本提取
+import fitz  # PyMuPDF，用于 PDF 文本提取
 from datetime import datetime
 from openai import OpenAI
 
+# 初始化 OpenAI 客户端（用于调用 deepseek 模型）
 client = OpenAI(
     api_key=os.environ.get("ARK_API_KEY"),
     base_url="https://ark.cn-beijing.volces.com/api/v3",
 )
 
-def search_and_download(keywords, max_results=5, download_dir='downloads'):
+# 目标公司关键词列表（全部为英文名称）
+TARGET_COMPANIES = [
+    "Google", "Shopee", "Alibaba", "Qwen", "Xiaohongshu", "Meituan", "Tencent", "Baidu"
+    "Facebook", "Amazon", "Microsoft", "Apple", "ByteDance", "Kuaishou", "jd"
+]
+
+def search_and_download(keywords, max_results=10, download_dir='downloads'):
     """
     根据指定关键词从 arXiv 上搜索论文，并自动下载 PDF 文件到 download_dir 目录。
-    多个关键词之间以 " AND " 组合（你也可以改为 " OR "）。
+    多个关键词之间以 " AND " 组合。
     """
     query = " AND ".join(keywords)
     search = arxiv.Search(
@@ -21,11 +28,13 @@ def search_and_download(keywords, max_results=5, download_dir='downloads'):
         sort_by=arxiv.SortCriterion.SubmittedDate,
         sort_order=arxiv.SortOrder.Descending
     )
+    # 将结果转换为列表，防止迭代器被提前消费
+    results = list(search.results())
+    print(results)
     
-    for result in search.results():
+    for result in results:
         print(f"正在下载: {result.title}")
         try:
-            # 自动下载 PDF 到指定目录，文件名默认以论文 arXiv ID 命名
             result.download_pdf(dirpath=download_dir)
             print("下载完成！")
         except Exception as e:
@@ -44,19 +53,31 @@ def extract_text_from_pdf(pdf_path):
         print(f"提取 {pdf_path} 文本失败: {e}")
     return text
 
+def contains_target_company(text):
+    """
+    检查论文文本中是否包含目标公司关键词（不区分大小写）。
+    返回 True 表示包含，False 表示不包含。
+    """
+    lower_text = text.lower()
+    for company in TARGET_COMPANIES:
+        if company.lower() in lower_text:
+            return True
+    return False
+
 def summarize_paper(text):
     """
     调用 deepseek 模型生成摘要。
-    为防止输入过长，这里只取文本前 5000 个字符。
+    为防止输入文本过长，这里只取文本前 5000 个字符。
     """
-    prompt = f"现有一篇最新论文，请你深入阅读并进行全面分析，主要从以下几个角度展开讨论：\
-        1. **核心创新点**：总结论文提出的主要算法或技术创新，解释其原理和与现有方法的差异。\
-        2. **实验与 验证**：评估论文中的实验设计、数据集、评测指标和结果，讨论这些结果的说服力和可靠性。\
-        3. **应用场景**：重点探讨论文中的技术如何在搜索引擎业务中发挥作用。请分析该技术在改进排序、召回、用户体验、数据处理等环节上的潜力与优势。\
-        4. **挑战与改进**：指出在将该技术落地到实际搜索引擎系统时可能遇到的技术挑战和工程难题，并提出可能的改进方案或替代思路。\
-        5. **未来展望**：结合当前搜索引擎的发展趋势，讨论该论文的技术对未来产品演进的启示和影响。\
-        请根据上述要求，生成一个结构清晰、逻辑严谨且具有深度的总结报告，既包括对论文内容的客观描述，也包含你对其在搜索引擎业务中应用价值的专业见解和建议。\
-        \n{text[:5000]}"
+    prompt = (
+        "现有一篇最新论文，请你深入阅读并进行全面分析，主要从以下几个角度展开讨论：\n"
+        "1. **核心创新点**：总结论文提出的主要算法或技术创新，解释其原理和与现有方法的差异。\n"
+        "2. **实验与验证**：评估论文中的实验设计、数据集、评测指标和结果，讨论这些结果的说服力和可靠性。\n"
+        "3. **应用场景**：重点探讨论文中的技术如何在搜索引擎业务中发挥作用。请分析该技术在改进排序、召回、用户体验、数据处理等环节上的潜力与优势。\n"
+        "4. **挑战与改进**：指出在将该技术落地到实际搜索引擎系统时可能遇到的技术挑战和工程难题，并提出可能的改进方案或替代思路。\n"
+        "5. **未来展望**：结合当前搜索引擎的发展趋势，讨论该论文的技术对未来产品演进的启示和影响。\n"
+        f"\n{text[:5000]}"
+    )
     messages = [
         {"role": "system", "content": "你是一位资深的搜索算法工程师，请你从专业角度阅读论文，生成包含核心创新、实验设计和在搜索引擎业务中应用价值的详细摘要。"},
         {"role": "user", "content": prompt}
@@ -76,7 +97,8 @@ def summarize_paper(text):
 def process_all_pdfs_and_summarize(folder_path):
     """
     遍历 folder_path 下所有 PDF 文件，
-    对每篇论文提取文本并调用 deepseek 模型生成摘要，
+    对每篇论文提取文本并检测是否包含目标大型互联网公司的信息，
+    若满足条件则调用 deepseek 模型生成摘要，
     返回列表，每个元素为 (论文标题, 摘要) 的元组。
     这里默认以 PDF 文件名（去除后缀）作为论文标题。
     """
@@ -92,7 +114,12 @@ def process_all_pdfs_and_summarize(folder_path):
                 print("未能提取到文本，跳过该文件。")
                 continue
 
-            print("正在调用 API 生成摘要...")
+            # 检查论文中是否包含目标公司的关键词
+            if not contains_target_company(text):
+                print(f"{paper_title} 未检测到目标公司信息，跳过。")
+                continue
+
+            print("检测到目标公司信息，正在调用 API 生成摘要...")
             summary = summarize_paper(text)
             if summary:
                 print(f"生成的摘要（{paper_title}）：")
@@ -125,17 +152,26 @@ def write_to_readme(date, outputs):
     print("README.md 文件已更新。")
 
 if __name__ == '__main__':
+    # 使用当前日期（格式为 YYYYMMDD）作为文件夹名称，例如 "./20250213"
     today = datetime.today().strftime('%Y%m%d')
     folder_path = f"./{today}"
     
     if not os.path.exists(folder_path):
         os.makedirs(folder_path)
+        print(f"文件夹 {folder_path} 已创建。")
+    else:
+        print(f"文件夹 {folder_path} 已存在。")
     
-    keywords = ["search engine", "neural retrieval"]
+    # 提供多个搜索关键词，专注于搜索算法与信息检索领域
+    keywords = [
+        "search engine", "information retrieval", "ranking algorithms",
+        # "query understanding", "relevance ranking", "user search behavior", "click-through rate prediction",
+        # "deep learning retrieval"
+    ]
     # 从 arXiv 搜索并下载论文到 folder_path
-    search_and_download(keywords, max_results=1, download_dir=folder_path)
+    search_and_download(keywords, max_results=10, download_dir=folder_path)
     
-    # 处理下载到 folder_path 中的所有 PDF 文件，生成摘要
+    # 处理下载到 folder_path 中的所有 PDF 文件，生成摘要（仅针对包含目标公司信息的论文）
     outputs = process_all_pdfs_and_summarize(folder_path)
     
     # 如果有摘要生成，则写入 README.md 文件
