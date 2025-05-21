@@ -164,7 +164,8 @@ if __name__ == '__main__':
     
     # 提供多个搜索关键词，专注于搜索算法与信息检索领域
     keywords = [
-        "search engine", "information retrieval", "ranking algorithms",
+        "search engine", "information retrieval", "ranking algorithms"
+        # , "large language model"
         # "query understanding", "relevance ranking", "user search behavior", "click-through rate prediction",
         # "deep learning retrieval"
     ]
